@@ -1,68 +1,96 @@
 import { Router } from 'express';
+import { getSupabase } from '../db.js';
+import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { v4 as uuidv4 } from 'uuid';
-import { getDb } from '../db.js';
 
 const router = Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 
 function signToken(user) {
-  return jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET || 'dev-secret', { expiresIn: '7d' });
+  return jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 }
 
 router.post('/register', async (req, res) => {
   const { name, email, password } = req.body;
+  const supabase = getSupabase();
 
-  if (!name || !email || !password) {
-    return res.status(400).json({ message: 'All fields are required' });
+  if (!email || !password || !name) {
+    return res.status(400).json({ message: 'All fields required' });
   }
 
-  const db = getDb();
-  const existing = db.data.users.find((user) => user.email.toLowerCase() === email.toLowerCase());
-  if (existing) {
-    return res.status(409).json({ message: 'User already exists' });
+  if (!supabase) {
+    return res.status(503).json({ message: 'Database unavailable' });
   }
 
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const user = {
-    id: uuidv4(),
-    name,
-    email: email.toLowerCase(),
-    password: hashedPassword,
-    createdAt: new Date().toISOString()
-  };
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = uuidv4();
 
-  db.data.users.push(user);
-  await db.write();
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email.toLowerCase())
+      .single();
 
-  const { password: _password, ...safeUser } = user;
-  const token = signToken(safeUser);
+    if (existingUser) {
+      return res.status(409).json({ message: 'User already exists' });
+    }
 
-  res.status(201).json({ user: safeUser, token });
+    const { data, error } = await supabase
+      .from('users')
+      .insert([{
+        id: userId,
+        name,
+        email: email.toLowerCase(),
+        password: hashedPassword,
+        created_at: new Date().toISOString()
+      }])
+      .select('id, name, email')
+      .single();
+
+    if (error) throw error;
+    const token = signToken(data);
+    res.status(201).json({ user: data, token });
+  } catch (error) {
+    res.status(500).json({ message: 'Registration failed' });
+  }
 });
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
+  const supabase = getSupabase();
 
   if (!email || !password) {
-    return res.status(400).json({ message: 'Email and password are required' });
+    return res.status(400).json({ message: 'Email and password required' });
   }
 
-  const db = getDb();
-  const user = db.data.users.find((entry) => entry.email.toLowerCase() === email.toLowerCase());
-  if (!user) {
-    return res.status(401).json({ message: 'Invalid credentials' });
+  if (!supabase) {
+    return res.status(503).json({ message: 'Database unavailable' });
   }
 
-  const match = await bcrypt.compare(password, user.password);
-  if (!match) {
-    return res.status(401).json({ message: 'Invalid credentials' });
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, name, email, password')
+      .eq('email', email.toLowerCase())
+      .single();
+
+    if (error || !user) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    const token = signToken(user);
+    const { password: _, ...safeUser } = user;
+    res.json({ user: safeUser, token });
+  } catch (error) {
+    res.status(500).json({ message: 'Login failed' });
   }
-
-  const { password: _password, ...safeUser } = user;
-  const token = signToken(safeUser);
-
-  res.json({ user: safeUser, token });
 });
 
 export default router;

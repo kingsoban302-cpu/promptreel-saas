@@ -1,26 +1,26 @@
-import { Low } from 'lowdb';
-import { JSONFile } from 'lowdb/node';
-import { fileURLToPath } from 'url';
-import path from 'path';
+import { createClient } from '@supabase/supabase-js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const dbPath = path.join(__dirname, 'data', 'db.json');
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const defaultData = {
-  users: [],
-  projects: []
-};
+let supabase = null;
 
-const adapter = new JSONFile(dbPath);
-const db = new Low(adapter, defaultData);
+export async function initializeSupabase() {
+  if (!supabaseUrl || !supabaseKey) {
+    console.warn('Supabase not configured - using fallback mode');
+    return false;
+  }
 
-export async function initializeDb() {
-  await db.read();
-  db.data ||= defaultData;
-  await db.write();
+  try {
+    supabase = createClient(supabaseUrl, supabaseKey);
+    console.log('Supabase initialized');
+    return true;
+  } catch (err) {
+    console.error('Supabase initialization failed:', err);
+    return false;
+  }
 }
 
-export function getDb() {
-  return db;
+export function getSupabase() {
+  return supabase;
 }
