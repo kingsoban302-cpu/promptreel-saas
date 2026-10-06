@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getDb } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
 import jwt from 'jsonwebtoken';
+import { generateVideoBrief } from '../services/aiService.js';
 
 const router = Router();
 
@@ -23,9 +24,10 @@ const requireAuth = (req, res, next) => {
 
 router.use(requireAuth);
 
-router.get('/', async (_req, res) => {
+router.get('/', async (req, res) => {
   const db = getDb();
-  res.json({ projects: db.data.projects });
+  const projects = db.data.projects.filter((project) => project.userId === req.user.id);
+  res.json({ projects });
 });
 
 router.get('/:id', async (req, res) => {
@@ -41,44 +43,37 @@ router.post('/generate', async (req, res) => {
     return res.status(400).json({ message: 'Prompt is required' });
   }
 
-  const db = getDb();
-  const projectId = uuidv4();
-  const project = {
-    id: projectId,
-    userId: req.user.id,
-    name: `${platform || 'instagram'}-${Date.now()}`,
-    prompt: prompt.trim(),
-    platform: platform || 'instagram',
-    style: style || 'cinematic',
-    views: 0,
-    createdAt: new Date().toISOString(),
-    cover: `https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=1200&q=80`,
-    script: generateScript(prompt, style),
-    status: 'ready'
-  };
+  try {
+    const brief = await generateVideoBrief({ prompt: prompt.trim(), platform, style });
+    const db = getDb();
+    const project = {
+      id: uuidv4(),
+      userId: req.user.id,
+      name: `${(platform || 'instagram').toUpperCase()}-${Date.now().toString().slice(-4)}`,
+      prompt: prompt.trim(),
+      platform: platform || 'instagram',
+      style: style || 'cinematic',
+      views: brief.views || Math.floor(Math.random() * 3000) + 500,
+      createdAt: new Date().toISOString(),
+      cover: brief.cover || 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=1200&q=80',
+      script: brief.script || {
+        style: style || 'cinematic',
+        prompt: prompt.trim(),
+        scenes: brief.scenes || ['Scene 1', 'Scene 2', 'Scene 3'],
+        hook: brief.hook || 'Start with the strongest visual detail.',
+        cta: brief.cta || 'Follow for more ideas.'
+      },
+      brief: brief,
+      status: 'ready'
+    };
 
-  db.data.projects.unshift(project);
-  await db.write();
+    db.data.projects.unshift(project);
+    await db.write();
 
-  res.status(201).json({ project });
+    res.status(201).json({ project });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'Failed to generate video brief' });
+  }
 });
-
-function generateScript(prompt, style) {
-  const lines = [
-    'Hook: Start with a bold statement that creates instant curiosity.',
-    'Scene 1: Showcase the strongest visual detail from the prompt.',
-    'Scene 2: Add motion, contrast, and a short emotional payoff.',
-    'Scene 3: End on a clear CTA or brand takeaway.'
-  ];
-
-  const styleLabel = style || 'cinematic';
-  return {
-    style: styleLabel,
-    prompt,
-    shots: lines,
-    hook: 'Use a quick visual reveal in the first 1.5 seconds.',
-    cta: 'Follow for more creative workflows.'
-  };
-}
 
 export default router;
